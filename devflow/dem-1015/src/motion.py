@@ -11,7 +11,11 @@ MOTION_MIN_MS = 150
 MOTION_MAX_MS = 400
 REDUCED_MOTION_MAX_MS = 100
 
-_EASE_OUT_EASINGS = ("ease-out", "ease-out-quad", "cubic-bezier(0.22, 1, 0.36, 1)")
+# The single easing curve used by every micro interaction.
+EASE_OUT_EASING = "cubic-bezier(0.22, 1, 0.36, 1)"
+MOTION_DURATION_MS = 250
+
+_EASE_OUT_EASINGS = ("ease-out", "ease-out-quad", EASE_OUT_EASING)
 
 
 def is_valid_motion_duration(duration_ms: int) -> bool:

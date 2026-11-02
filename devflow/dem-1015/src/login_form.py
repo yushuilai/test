@@ -2,10 +2,18 @@
 
 This is where every interactive acceptance criterion lands: field errors with
 aria state (AC-003/004), password visibility toggle (AC-005), loading + duplicate
-submit prevention (AC-006), unified 401 copy (AC-007) and safe redirect (AC-008).
+submit prevention (AC-006), unified failure copy (AC-007) and safe redirect
+(AC-008).
 
-The auth adapter is injected via the constructor (the dependency-injection seam
-called out as a P1 review finding), so tests can swap in deterministic doubles.
+Design notes fixed after independent verification:
+
+* the auth adapter is injected through the constructor (the dependency-injection
+  seam called out as a P1 review finding), so tests never depend on real I/O;
+* every *new* submit clears the previous form-level error and pending redirect,
+  otherwise a stale "账号或密码错误" or a stale navigation target survives into the
+  next attempt (AC-008: a failed attempt must never navigate);
+* the account is submitted trimmed, exactly as it was validated, so the value the
+  backend sees matches the value that passed the format check.
 """
 
 from __future__ import annotations
@@ -37,16 +45,19 @@ class FieldState:
 def _map_error(error_code: Optional[str]) -> str:
     """Map a normalized error code to a user-facing message key.
 
-    The 401 case maps to the unified ``invalid_credentials`` copy so the page
-    never reveals whether the account exists (AC-DEM-1015-007).
+    Both 401 and 423 collapse onto ``invalid_credentials``: a dedicated lockout
+    message would confirm that the account exists and turn the form into an
+    enumeration oracle. 429 (request rate) and 5xx (service health) leak nothing
+    about the account, so they keep their own copy. Raw backend text is never
+    surfaced.
     """
-    if error_code == AuthErrorCode.INVALID_CREDENTIALS:
+    if error_code in (AuthErrorCode.INVALID_CREDENTIALS, AuthErrorCode.ACCOUNT_LOCKED):
         return "invalid_credentials"
     if error_code == AuthErrorCode.RATE_LIMITED:
         return "rate_limited"
-    if error_code == AuthErrorCode.ACCOUNT_LOCKED:
-        return "account_locked"
-    if error_code in (AuthErrorCode.NETWORK_ERROR, AuthErrorCode.TIMEOUT):
+    if error_code in (AuthErrorCode.TIMEOUT, AuthErrorCode.NETWORK_ERROR):
+        # A timeout and a dropped connection are indistinguishable to the user and
+        # both mean "we do not know the outcome": one copy, no retry storm.
         return "network_error"
     return "server_error"
 
@@ -66,7 +77,11 @@ class LoginForm:
 
     # ---- password visibility -------------------------------------------------
     def toggle_password_visibility(self) -> bool:
-        """Flip password visibility and return the new visible state."""
+        """Flip password visibility and return the new visible state.
+
+        Only the input ``type`` changes; the typed value is never touched
+        (AC-DEM-1015-005).
+        """
         self._password_visible = not self._password_visible
         return self._password_visible
 
@@ -124,6 +139,10 @@ class LoginForm:
     def pending_redirect(self) -> Optional[str]:
         return self._pending_redirect
 
+    @property
+    def last_result(self) -> Optional[AuthResult]:
+        return self._last_result
+
     # ---- behaviour -----------------------------------------------------------
     def submit_on_enter(self, source_field: str) -> bool:
         """Return True when pressing Enter in ``source_field`` should submit."""
@@ -132,14 +151,20 @@ class LoginForm:
     def submit(self, account: str, password: str) -> Optional[AuthResult]:
         """Validate then submit; returns None on validation failure or duplicate click.
 
-        While loading, any further submit is ignored so a repeat click never
-        triggers a second request (AC-DEM-1015-006).
+        While loading, any further submit is ignored *before* mutating state, so a
+        repeat click neither fires a second request nor wipes the in-flight
+        status text (AC-DEM-1015-006).
         """
-        self._account.value = account
-        self._password.value = password
         if self._loading:
             return None
-        validation = validate_form(account, password)
+
+        normalized_account = account.strip()
+        self._form_error_key = None
+        self._pending_redirect = None
+        self._account.value = normalized_account
+        self._password.value = password
+
+        validation = validate_form(normalized_account, password)
         self._account.invalid = validation.account_error is not None
         self._password.invalid = validation.password_error is not None
         self._account.error_key = validation.account_error
@@ -148,11 +173,15 @@ class LoginForm:
         self._password.described_by = "password-error" if validation.password_error else None
         if not validation.is_valid:
             return None
+
         self._loading = True
         try:
-            result = self.auth_adapter.login(Credentials(account=account, password=password))
+            result = self.auth_adapter.login(
+                Credentials(account=normalized_account, password=password)
+            )
         finally:
             self._loading = False
+
         self._last_result = result
         if result.success:
             self._form_error_key = None

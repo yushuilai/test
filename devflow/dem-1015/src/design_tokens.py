@@ -3,14 +3,23 @@
 The subjective "tech feel" requirement is expressed as quantifiable tokens so the
 visual checklist (AC-DEM-1015-011) and accessibility contrast checks
 (AC-DEM-1015-013) can be verified in code instead of by eye.
+
+Every visual knob (color, spacing, radius, glow strength, motion timing, font
+stack) is declared here and injected into the rendered CSS, so rebranding changes
+one dataclass instead of the components (NFR 可维护性).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Tuple
 
-from .motion import is_ease_out, is_valid_motion_duration
+from .motion import (
+    EASE_OUT_EASING,
+    MOTION_DURATION_MS,
+    is_ease_out,
+    is_valid_motion_duration,
+)
 
 # Dark base luminance must stay below 30% (AC-DEM-1015-011 item 1).
 DARK_BASE_MAX_LUMINANCE = 0.30
@@ -61,8 +70,7 @@ class DesignTokens:
     """Design tokens that express the "tech feel" spec.
 
     One primary color (cyan glow), one secondary color (violet accent), and a
-    neutral dark scale. All visual knobs live here so rebranding only changes
-    variables, not components.
+    neutral dark scale — the palette never exceeds 1+1+neutrals (AC-011 item 6).
     """
 
     primary: str = "#00E5FF"
@@ -75,9 +83,20 @@ class DesignTokens:
     focus_ring: str = "#00E5FF"
     border_glow: str = "#00E5FF"
     radius_px: int = 12
+    glow_blur_px: int = 32
+    spacing_px: Tuple[int, ...] = (4, 8, 12, 16, 24, 32)
+    easing: str = EASE_OUT_EASING
+    motion_duration_ms: int = MOTION_DURATION_MS
+    font_stack: str = (
+        "'TechSans', 'Segoe UI', system-ui, -apple-system, 'PingFang SC', "
+        "'Microsoft YaHei', sans-serif"
+    )
 
 
 DEFAULT_TOKENS = DesignTokens()
+
+# Alias kept readable in the renderer.
+DEFAULT_SPACING = DEFAULT_TOKENS.spacing_px
 
 
 @dataclass(frozen=True)
@@ -88,10 +107,11 @@ class VisualSpec:
     has_dynamic_background: bool = True
     has_glow_or_glass: bool = True
     button_has_three_states: bool = True
-    motion_duration_ms: int = 250
-    easing: str = "ease-out"
+    motion_duration_ms: int = DEFAULT_TOKENS.motion_duration_ms
+    easing: str = DEFAULT_TOKENS.easing
     primary_color_count: int = 1
     secondary_color_count: int = 1
+    extra: List[str] = field(default_factory=list)
 
 
 def validate_visual_checklist(spec: VisualSpec) -> List[str]:
