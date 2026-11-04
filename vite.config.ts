@@ -7,5 +7,7 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: true,
+    // Windows 上 forks 池并发写模块缓存临时文件会偶发 EPERM，串行执行规避
+    fileParallelism: false,
   },
 });
